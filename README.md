@@ -77,8 +77,6 @@ docker network create my_pipeline_network
 
 Run the MySQL container, mounting the cloned `retail_db` directory into the container's `/docker-entrypoint-initdb.d/`. This will automatically execute the `create_db.sql` script to create tables and load data on the first run.
 
-> **Important**: Ensure you have removed the PostgreSQL-specific `.sql` files (`create_db_tables_pg.sql`, `load_db_tables_pg.sql`) from your host's `retail_db` directory before running this command, as they can cause the MySQL init script to fail.
-
 ```bash
 docker run --name mysql-container \
 --network my_pipeline_network \
