@@ -2,6 +2,18 @@
 
 This project implements a simple, scalable, and generic ETL pipeline to copy data from a MySQL source database to a PostgreSQL target database using Python, Docker, and Apache Airflow for orchestration and parallelism.
 
+```mermaid
+graph TD
+    A[Start] --> B[Copy Customers & Categories]
+    A --> C[Copy Products & Departments]
+    A --> D[Copy Orders]
+    A --> E[Copy Order Items]
+    B --> F[End]
+    C --> F
+    D --> F
+    E --> F
+```
+
 ## Features
 
 - **Dockerized**: The pipeline logic runs within a Docker container, ensuring consistency across environments.  
@@ -163,53 +175,125 @@ docker run ... data-pipeline app.py dev customers,orders
 
 ### With Apache Airflow
 
-#### Ensure Airflow Setup
+For scheduled, parallel, and orchestrated execution, use the provided Airflow DAG.
 
-Make sure you have a running Airflow environment (local, Docker Compose, Kubernetes, etc.) and that it can communicate with your Docker daemon (often requires mounting `/var/run/docker.sock` into the Airflow worker/scheduler containers).
+**Ensure Airflow Setup**: Make sure you have a running Airflow environment (local, Docker Compose, Kubernetes, etc.) and that it can communicate with your Docker daemon (often requires mounting /var/run/docker.sock into the Airflow worker/scheduler containers).
 
-#### Place the DAG File
-
-Copy the `data_pipeline_docker.py` file into your Airflow `dags` folder.
+**Place the DAG File**: Copy the data_pipeline_docker.py file into your Airflow dags folder.
 
 ```python
 # dags/data_pipeline_docker.py
-# Full DAG code here...
+from airflow.models import DAG
+from airflow.providers.docker.operators.docker import DockerOperator
+from airflow.utils.dates import days_ago
+from docker.types import Mount
+
+from airflow.operators.dummy import DummyOperator
+
+args = {
+    'owner': 'ITVersity, Inc',
+    'start_date': days_ago(2),
+}
+
+# Define the DAG
+dag = DAG(
+    dag_id='data-pipeline-parallel',
+    default_args=args,
+    schedule_interval='0 0 * * *', # Example: Run daily at midnight UTC
+    catchup=False,
+    concurrency=4, # Limit concurrent tasks within this DAG run
+    max_active_tasks=4 # Limit active tasks across all DAG runs for this DAG
+)
+
+# Environment variables to pass to the Docker container
+env_vars = {
+    'SOURCE_DB_USER': 'retail_user',
+    'SOURCE_DB_PASS': 'itversity',
+    'TARGET_DB_USER': 'retail_user',
+    'TARGET_DB_PASS': 'itversity',
+}
+
+# Volume mounts for the Docker container (mapping host code to container /app)
+# IMPORTANT: This host path '/root/path_to_projectg' must be
+# accessible by the Airflow worker/scheduler running the DockerOperator.
+# Adjust this path based on your Airflow setup (e.g., if Airflow is also in Docker,
+# this might need to be a path on the Docker host or a shared volume).
+mounts = [
+    Mount(
+        source='/root/path_to_project', # Host path
+        target='/app', # Container path
+        type='bind'
+    )
+]
+
+# Define groups of tables to process in parallel
+# Each entry in this list will become a separate Airflow task.
+table_groups = [
+    {'task_id': 'copy_customers_categories', 'tables': ['customers', 'categories']},
+    {'task_id': 'copy_products_departments', 'tables': ['products', 'departments']},
+    {'task_id': 'copy_orders', 'tables': ['orders']}, # Often good to isolate large tables
+    {'task_id': 'copy_order_items', 'tables': ['order_items']} # Often good to isolate large tables
+]
+
+# Optional: Dummy tasks for visualization
+start = DummyOperator(task_id='start_parallel_copy', dag=dag)
+end = DummyOperator(task_id='end_parallel_copy', dag=dag)
+
+# Create DockerOperator tasks dynamically based on table_groups
+tasks = []
+for group in table_groups:
+    task = DockerOperator(
+        task_id=group['task_id'],
+        image='data-pipeline:latest', # The Docker image to use
+        auto_remove='success', # Remove the container after successful execution
+        environment=env_vars, # Pass environment variables
+        mounts=mounts, # Mount the code volume
+        network_mode='my_pipeline_network', # Attach to the custom network
+        entrypoint='python', # Use python as the entrypoint
+        # The command passed to the entrypoint
+        # Pass 'dev' as the environment and a comma-separated string of tables
+        command=['/app/app.py', 'dev', ','.join(group['tables'])],
+        docker_url='unix:///var/run/docker.sock', # URL to the Docker daemon (adjust if needed)
+        dag=dag # Associate with the DAG
+    )
+    tasks.append(task)
+
+# Define dependencies for parallel execution
+# All individual copy tasks run after 'start' and before 'end'.
+# Since there are no dependencies *between* the tasks in the 'tasks' list,
+# Airflow will schedule them to run in parallel based on available slots
+# (Airflow worker capacity, DAG's concurrency/max_active_tasks).
+start >> tasks >> end
 ```
+*(Replace `/root/path_to_project` with the actual path on your host)*
 
-Airflow UI: The DAG should appear in the Airflow UI. You can trigger it manually or let the schedule run it. You will see multiple DockerOperator tasks running concurrently.
-
----
+**Airflow UI**: The DAG should appear in the Airflow UI. You can trigger it manually or let the schedule run it. You will see multiple DockerOperator tasks running concurrently.
 
 ## Extensibility
 
-The refactored `util.py` uses a connector pattern with factory functions (`create_source_connector`, `create_target_connector`). To add support for a new data source (like an API) or a new target (like writing to S3 or a file format):
+The refactored util.py uses a connector pattern with factory functions (create_source_connector, create_target_connector). To add support for a new data source (like an API) or a new target (like writing to S3 or a file format):
 
-- Create a new connector class (e.g., `APISourceConnector`, `S3TargetConnector`) inheriting from `SourceConnector` or `TargetConnector`.
-- Implement the required methods (`connect`, `read_table` or `load_table`).
-- Update the corresponding factory function (`create_source_connector` or `create_target_connector`) in `util.py` to include an `elif` block that checks for the new `DB_TYPE` (or `SOURCE_TYPE`/`TARGET_TYPE`) and returns an instance of your new connector class.
-- Update `config.py` to include configuration details for the new source/target type.
-- Update `requirements.txt` with any new Python libraries needed for the new connector (e.g., `requests` for an API).
-
----
+1. Create a new connector class (e.g., APISourceConnector, S3TargetConnector) inheriting from SourceConnector or TargetConnector.
+2. Implement the required methods (connect, read_table or load_table).
+3. Update the corresponding factory function (create_source_connector or create_target_connector) in util.py to include an elif block that checks for the new DB_TYPE (or SOURCE_TYPE/TARGET_TYPE) and returns an instance of your new connector class.
+4. Update config.py to include configuration details for the new source/target type.
+5. Update requirements.txt with any new Python libraries needed for the new connector (e.g., requests for an API).
 
 ## Troubleshooting
 
-**MySQL access denied or Connection Errors:**
+**MySQL access denied or Connection Errors**:
+- Verify the environment variables (SOURCE_DB_USER, SOURCE_DB_PASS, TARGET_DB_USER, TARGET_DB_PASS) are correctly passed to the Docker container.
+- Ensure the Docker containers (mysql-container, postgres-db, data-pipeline) are all on the same Docker network (my_pipeline_network).
+- Check that the DB_HOST values in config.py (mysql-container, postgres-db) match the container names.
+- Check the container logs (docker logs <container_name>) for specific error details.
 
-- Verify the environment variables (`SOURCE_DB_USER`, `SOURCE_DB_PASS`, `TARGET_DB_USER`, `TARGET_DB_PASS`) are correctly passed to the Docker container.
-- Ensure the Docker containers (`mysql-container`, `postgres-db`, `data-pipeline`) are all on the same Docker network (`my_pipeline_network`).
-- Check that the `DB_HOST` values in `config.py` (`mysql-container`, `postgres-db`) match the container names.
-- Check the container logs (`docker logs <container_name>`) for specific error details.
+**Container Stops Immediately After Start**:
+- For the database containers: Check docker logs <container_name>. For MySQL, ensure only MySQL-specific .sql files are in /docker-entrypoint-initdb.d/.
+- For the pipeline container: Check docker logs data-pipeline for Python traceback errors.
 
-**Container Stops Immediately After Start:**
-
-- For the database containers, this often means an initialization script failed. Check `docker logs <container_name>`.
-- For MySQL, ensure only MySQL-specific `.sql` files are in `/docker-entrypoint-initdb.d/`.
-- For the pipeline container, check `docker logs data-pipeline` for Python traceback errors.
-
-**Airflow DockerOperator Errors:**
-
-- Verify the `docker_url` in the DAG is correct and the Airflow worker/scheduler can access the Docker daemon.
-- Ensure the `mounts` source path is correct and accessible from where the Docker container is being launched by Airflow.
+**Airflow DockerOperator Errors**:
+- Verify the docker_url in the DAG is correct and the Airflow worker/scheduler can access the Docker daemon.
+- Ensure the mounts source path is correct and accessible from where the Docker container is being launched by Airflow.
 - Check the Airflow task logs for the specific error output from the Docker container execution.
+
 
