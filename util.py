@@ -54,7 +54,7 @@ def _get_pg_connection(db_host: str, db_name: str, db_user: str, db_pass: str) -
         logger.error(f"PostgreSQL Connection Error: {error}", exc_info=True)
     return None
 
-# --- Base Connector Classes (Optional, but good for defining interface) ---
+# --- Base Connector Classes good for defining interface ---
 
 class SourceConnector:
     """Base class for data source connectors."""
@@ -66,8 +66,9 @@ class SourceConnector:
         """Establishes the connection."""
         raise NotImplementedError("Subclasses must implement this method")
 
-    def read_table(self, table_name: str) -> Tuple[Optional[List[Tuple]], Optional[List[str]]]:
-        """Reads data and column names from a specified table."""
+    def read_table(self, table_name: str, watermark_column: Optional[str] = None,
+                       last_watermark_value: Optional[Any] = None) -> Tuple[Optional[List[Tuple]], Optional[List[str]]]:
+        """Reads data and column names from a specified table, optionally incrementally."""
         raise NotImplementedError("Subclasses must implement this method")
 
     def close(self):
@@ -128,9 +129,10 @@ class MySQLSourceConnector(SourceConnector):
         return self._connection
 
     # Integrated logic from read.py
-    def read_table(self, table_name: str, limit: int = 0) -> Tuple[Optional[List[Tuple]], Optional[List[str]]]:
+    def read_table(self, table_name: str, watermark_column: Optional[str] = None,
+                   last_watermark_value: Optional[Any] = None) -> Tuple[Optional[List[Tuple]], Optional[List[str]]]:
         """
-        Reads data and column names from a specified MySQL table.
+        Reads data and column names from a specified MySQL table, optionally incrementally.
         Uses the connector's internal connection.
         """
         connection = self.connect()
@@ -142,8 +144,25 @@ class MySQLSourceConnector(SourceConnector):
         try:
             cursor = connection.cursor()
             query = f"SELECT * FROM {table_name}"
-            if limit > 0:
-                 query += f" LIMIT {limit}"
+
+            # Add WHERE clause for incremental loading if watermark details are provided
+            if watermark_column and last_watermark_value is not None:
+                # Assuming watermark_type is handled by how the value is formatted or the column type
+                # For simplicity here, we'll use '>' for both ID and timestamp,
+                # assuming timestamp is formatted correctly for SQL comparison.
+                # More complex logic might be needed for different data types or inclusive ranges.
+                if isinstance(last_watermark_value, str):
+                     # Assume string value needs quoting (e.g., timestamp)
+                     query += f" WHERE `{watermark_column}` > '{last_watermark_value}'"
+                else:
+                     # Assume numeric value (e.g., ID)
+                     query += f" WHERE `{watermark_column}` > {last_watermark_value}"
+
+                logger.info(f"Performing incremental read for {table_name} where {watermark_column} > {last_watermark_value}")
+            else:
+                 logger.info(f"Performing full read for {table_name}")
+
+
             logger.info(f"Executing query: {query}")
             cursor.execute(query)
 
@@ -151,7 +170,6 @@ class MySQLSourceConnector(SourceConnector):
             data = cursor.fetchall()
 
             # Fetch column names from cursor description (MySQL specific)
-            # Using cursor.column_names is specific to mysql.connector
             column_names = cursor.column_names if cursor.description else []
 
             logger.info(f"Successfully read {len(data) if data else 0} rows from {table_name}")
@@ -379,6 +397,32 @@ def get_tables(path: str, table_list_arg: str) -> Optional[pd.DataFrame]:
         return None
     except Exception as e:
         logger.error(f"Error processing tables list file: {e}", exc_info=True)
+        return None
+
+# Utility function to find the maximum value of a column in fetched data
+def find_max_watermark_value(data: List[Tuple], column_names: List[str], watermark_column: str) -> Optional[Any]:
+    """
+    Finds the maximum value for a specified watermark column in a list of data tuples.
+    Returns None if data is empty or column not found.
+    """
+    if not data or not column_names or watermark_column not in column_names:
+        return None
+
+    try:
+        col_index = column_names.index(watermark_column)
+        # Extract all values for the watermark column
+        watermark_values = [row[col_index] for row in data if row and len(row) > col_index and row[col_index] is not None]
+
+        if not watermark_values:
+            return None
+
+        # Find the maximum value
+        max_value = max(watermark_values)
+        logger.info(f"Found maximum watermark value for column '{watermark_column}': {max_value}")
+        return max_value
+
+    except Exception as e:
+        logger.error(f"Error finding maximum watermark value for column '{watermark_column}': {e}", exc_info=True)
         return None
 
 # Note: The original get_connection function is now obsolete as connectors manage connections.

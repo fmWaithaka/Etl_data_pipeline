@@ -1,9 +1,7 @@
-table_name,to_be_loaded
-customers,yes
-departments,yes
-categories,yes
-products,yes
-orders,yes
-order_items,yes
-
-
+table_name,to_be_loaded,watermark_column,watermark_type
+customers,yes,customer_id,id
+departments,yes,,
+categories,yes,,
+products,yes,,
+orders,yes,order_date,timestamp
+order_items,yes,order_item_id,id
