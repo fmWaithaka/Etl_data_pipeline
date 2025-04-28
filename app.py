@@ -2,7 +2,6 @@ import logging
 import sys
 import argparse
 import os
-from typing import Optional, List, Tuple, Any, Dict
 
 from util import load_db_details, get_tables, create_source_connector, create_target_connector, find_max_watermark_value
 
@@ -15,15 +14,14 @@ logging.basicConfig(
     filemode="a",
     force=True
 )
-# Add console handler for visibility during execution
-console_handler = logging.StreamHandler(sys.stdout) # Use sys.stdout explicitly
+console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
-# Avoid adding handler multiple times if script is reloaded
 if not any(isinstance(handler, logging.StreamHandler) for handler in logging.getLogger('').handlers):
     logging.getLogger('').addHandler(console_handler)
 # --- End Logging Setup ---
+
 
 
 def main():
@@ -40,7 +38,7 @@ def main():
     )
     parser.add_argument(
         "--tables-list-path",
-        default="tables_list", # Default file name
+        default="tables_list",
         help="Path to the file containing the list of tables if table_arg is 'all'."
     )
 
@@ -56,6 +54,7 @@ def main():
     logging.info(f"Starting pipeline for environment '{env}' and tables '{table_arg}'...")
 
     logging.info("Loading DB configuration...")
+    # load_db_details should be updated to maybe load from a specific path if needed
     db_config = load_db_details(env)
     if not db_config:
         logging.error(f"Failed to load configuration for environment '{env}'.")
@@ -67,19 +66,17 @@ def main():
         logging.error("Configuration is missing 'SOURCE_DB' or 'TARGET_DB' sections.")
         sys.exit(1)
 
-    # Create source and target connectors
     logging.info("Creating source connector...")
-    source_connector = create_source_connector(source_db_config)
+    source_connector = create_source_connector(source_db_config) # Call factory from util
     if not source_connector:
         logging.error("Failed to create source connector. Exiting.")
         sys.exit(1)
 
     logging.info("Creating target connector...")
-    target_connector = create_target_connector(target_db_config)
+    target_connector = create_target_connector(target_db_config) # Call factory from util
     if not target_connector:
         logging.error("Failed to create target connector. Exiting.")
         sys.exit(1)
-
 
     logging.info("Retrieving table list to process...")
     # get_tables now reads watermark columns
@@ -106,13 +103,8 @@ def main():
             env_var_name = f"LAST_WATERMARK_{table_name.upper()}"
             last_watermark_str = os.environ.get(env_var_name)
 
-            if last_watermark_str is None or last_watermark_str.lower() == 'none':
-                 logging.info(f"No last watermark found for {table_name} (env var {env_var_name} is None or 'None'). Performing full initial load.")
-                 # If no last watermark value is found (None) or it's the string 'None',
-                 # treat it as a full initial load.
-                 watermark_column = None # Ensure full load query is built
-                 last_watermark_value = None
-            else:
+            # Correctly handle the case where the environment variable is the string 'None' or empty
+            if last_watermark_str and last_watermark_str.lower() != 'none' and last_watermark_str.strip() != '':
                  try:
                      # Attempt to convert the string value based on watermark_type
                      if watermark_type == 'id':
@@ -120,24 +112,35 @@ def main():
                          logging.info(f"Retrieved last ID watermark for {table_name}: {last_watermark_value}")
                      elif watermark_type == 'timestamp':
                          # Depending on the exact format, you might need more sophisticated parsing
-                         last_watermark_value = last_watermark_str # Pass as string for SQL comparison
-                         logging.info(f"Retrieved last Timestamp watermark for {table_name}: {last_watermark_value}")
+                         # For now, pass the string directly to the SQL query
+                         last_watermark_value = last_watermark_str
+                         logging.info(f"Retrieved last Timestamp watermark for {table_name}: '{last_watermark_value}'")
                      else:
                          logging.warning(f"Unknown watermark_type '{watermark_type}' for table {table_name}. Performing full load.")
                          watermark_column = None # Disable incremental for this table
-                         last_watermark_value = None
+                         last_watermark_value = None # Ensure full load query
                  except ValueError:
                       logging.error(f"Failed to convert last watermark value '{last_watermark_str}' for table {table_name} with type '{watermark_type}'. Performing full load.", exc_info=True)
                       watermark_column = None # Disable incremental for this table
-                      last_watermark_value = None
+                      last_watermark_value = None # Ensure full load query
+            else:
+                 # This block is hit if last_watermark_str is None, '', or 'None'
+                 logging.info(f"No valid last watermark found for {table_name} (env var {env_var_name} is '{last_watermark_str}'). Performing full initial load.")
+                 # Ensure full load query is built
+                 watermark_column = None
+                 last_watermark_value = None
         else:
-             logging.info(f"No watermark column defined for table {table_name}. Performing full load.")
+             logging.info(f"No watermark column defined for table {table_name} in tables_list. Performing full load.")
+             # Ensure full load query is built
+             watermark_column = None
+             last_watermark_value = None
         # --- End Incremental Loading Logic ---
 
 
         try:
             logging.info(f"Reading data from source for table: {table_name}")
             # Pass watermark details to the read_table method
+            # Note: If watermark_column is None due to checks above, read_table will perform a full load
             data, column_names = source_connector.read_table(
                 table_name=table_name,
                 watermark_column=watermark_column,
@@ -153,15 +156,25 @@ def main():
                 continue
 
             logging.info(f"Loading data into target for table: {table_name}")
+            # The load_table method in PostgresTargetConnector handles insertion.
+            # It currently uses INSERT. For incremental updates/deletes,
+            # you would need a different strategy here (e.g., MERGE, staging table).
+            # For insert-only incremental, INSERT is fine for new records.
             target_connector.load_table(table_name, data, column_names)
             logging.info(f"Successfully processed table: {table_name}")
 
             # --- Calculate and Output New Watermark ---
-            if watermark_column and column_names and data:
-                 new_watermark_value = find_max_watermark_value(data, column_names, watermark_column)
+            # Only calculate and output a new watermark if a watermark column is defined
+            # and data was processed.
+            if row.get('watermark_column') and column_names and data:
+                 # Use the original watermark_column name from the tables_list for finding max value
+                 original_watermark_column_name = row.get('watermark_column')
+                 new_watermark_value = find_max_watermark_value(data, column_names, original_watermark_column_name)
+
                  if new_watermark_value is not None:
                       # Output the new watermark value in a parsable format for Airflow
                       # Using print to stdout is common for Airflow to capture via XComs
+                      # Ensure the value is stringified for printing
                       print(f"NEW_WATERMARK_{table_name.upper()}={new_watermark_value}")
                       logging.info(f"Outputted new watermark for {table_name}: {new_watermark_value}")
                  else:
@@ -187,8 +200,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-        logging.info("Pipeline finished successfully.")
     except Exception as main_e:
-        # Catch any unhandled exceptions from main
         logging.critical(f"An unhandled error occurred during pipeline execution: {main_e}", exc_info=True)
         sys.exit(1) # Exit with a non-zero code to indicate failure
