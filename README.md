@@ -273,3 +273,13 @@ COMMIT;
 > - The incremental load mechanism (Airflow Variables, Watermarks) has been properly configured.
 
 This ensures your **incremental ETL pipeline** will detect and process only the newly inserted records during the next scheduled run.
+
+## Contact
+
+For any questions, feedback, or collaboration opportunities, feel free to reach out:
+
+- **Name:** Waithaka Francis
+- **Email:** franco313mwas@gmail.com
+- **GitHub:** [fmWaithaka](https://github.com/fmWaithaka)
+- **LinkedIn:** [Waithaka Francis](https://www.linkedin.com/in/waithaka-francis-471891241/)
+
