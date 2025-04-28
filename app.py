@@ -106,7 +106,13 @@ def main():
             env_var_name = f"LAST_WATERMARK_{table_name.upper()}"
             last_watermark_str = os.environ.get(env_var_name)
 
-            if last_watermark_str:
+            if last_watermark_str is None or last_watermark_str.lower() == 'none':
+                 logging.info(f"No last watermark found for {table_name} (env var {env_var_name} is None or 'None'). Performing full initial load.")
+                 # If no last watermark value is found (None) or it's the string 'None',
+                 # treat it as a full initial load.
+                 watermark_column = None # Ensure full load query is built
+                 last_watermark_value = None
+            else:
                  try:
                      # Attempt to convert the string value based on watermark_type
                      if watermark_type == 'id':
@@ -124,11 +130,6 @@ def main():
                       logging.error(f"Failed to convert last watermark value '{last_watermark_str}' for table {table_name} with type '{watermark_type}'. Performing full load.", exc_info=True)
                       watermark_column = None # Disable incremental for this table
                       last_watermark_value = None
-            else:
-                 logging.info(f"No last watermark found for {table_name} (env var {env_var_name} not set). Performing full initial load.")
-                 # If no last watermark value is found, treat it as a full initial load
-                 watermark_column = None # Ensure full load query is built
-                 last_watermark_value = None
         else:
              logging.info(f"No watermark column defined for table {table_name}. Performing full load.")
         # --- End Incremental Loading Logic ---
