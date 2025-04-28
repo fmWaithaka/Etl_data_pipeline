@@ -22,7 +22,6 @@ if not any(isinstance(handler, logging.StreamHandler) for handler in logging.get
 # --- End Logging Setup ---
 
 
-
 def main():
     """
     Main function to run the ETL pipeline.
@@ -183,7 +182,7 @@ def main():
                       # Output the new watermark value in a parsable format for Airflow
                       # Using print to stdout is common for Airflow to capture via XComs
                       # Ensure the value is stringified for printing
-                      print(f"NEW_WATERMARK_{table_name.upper()}={new_watermark_value}")
+                      print(f"NEW_WATERMARK_{table_name.upper()}={new_watermark_value}", flush=True) # Added flush=True
                       logging.info(f"Outputted new watermark for {table_name}: {new_watermark_value}")
                  else:
                       logging.warning(f"Could not determine new watermark for {table_name} despite data being processed.")
