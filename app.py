@@ -2,7 +2,6 @@ import logging
 import sys
 import argparse
 import os
-
 from util import load_db_details, get_tables, create_source_connector, create_target_connector, find_max_watermark_value
 
 # --- Logging Setup ---
@@ -97,44 +96,52 @@ def main():
 
         # --- Incremental Loading Logic ---
         last_watermark_value = None
-        if watermark_column:
+        # Check if watermark_column is defined and not an empty string
+        if watermark_column and str(watermark_column).strip() != '':
             # Read the last watermark value from an environment variable
             # The environment variable name format is assumed to be LAST_WATERMARK_<TABLE_NAME_UPPERCASE>
             env_var_name = f"LAST_WATERMARK_{table_name.upper()}"
             last_watermark_str = os.environ.get(env_var_name)
 
-            # Correctly handle the case where the environment variable is the string 'None' or empty
-            if last_watermark_str and last_watermark_str.lower() != 'none' and last_watermark_str.strip() != '':
+            # Correctly handle the case where the environment variable is None, '', or the string 'None'
+            if last_watermark_str is not None and last_watermark_str.lower() != 'none' and last_watermark_str.strip() != '':
                  try:
                      # Attempt to convert the string value based on watermark_type
                      if watermark_type == 'id':
+                         # Ensure the value is treated as an integer for comparison
                          last_watermark_value = int(last_watermark_str)
                          logging.info(f"Retrieved last ID watermark for {table_name}: {last_watermark_value}")
                      elif watermark_type == 'timestamp':
-                         # Depending on the exact format, you might need more sophisticated parsing
-                         # For now, pass the string directly to the SQL query
+                         # For timestamp, pass the string directly to the SQL query
+                         # Ensure the format is compatible with MySQL timestamp comparison
                          last_watermark_value = last_watermark_str
                          logging.info(f"Retrieved last Timestamp watermark for {table_name}: '{last_watermark_value}'")
                      else:
                          logging.warning(f"Unknown watermark_type '{watermark_type}' for table {table_name}. Performing full load.")
-                         watermark_column = None # Disable incremental for this table
-                         last_watermark_value = None # Ensure full load query
+                         # If type is unknown, disable incremental for this table
+                         watermark_column = None
+                         last_watermark_value = None
                  except ValueError:
                       logging.error(f"Failed to convert last watermark value '{last_watermark_str}' for table {table_name} with type '{watermark_type}'. Performing full load.", exc_info=True)
-                      watermark_column = None # Disable incremental for this table
-                      last_watermark_value = None # Ensure full load query
+                      # If conversion fails, disable incremental for this table
+                      watermark_column = None
+                      last_watermark_value = None
             else:
                  # This block is hit if last_watermark_str is None, '', or 'None'
                  logging.info(f"No valid last watermark found for {table_name} (env var {env_var_name} is '{last_watermark_str}'). Performing full initial load.")
-                 # Ensure full load query is built
+                 # Ensure full load query is built by setting watermark_column and value to None
                  watermark_column = None
                  last_watermark_value = None
         else:
-             logging.info(f"No watermark column defined for table {table_name} in tables_list. Performing full load.")
+             logging.info(f"No watermark column defined or is empty for table {table_name} in tables_list. Performing full load.")
              # Ensure full load query is built
              watermark_column = None
              last_watermark_value = None
         # --- End Incremental Loading Logic ---
+
+        # --- Add logging before calling read_table ---
+        logging.info(f"Final read parameters for {table_name}: watermark_column={watermark_column}, last_watermark_value={last_watermark_value}")
+        # --- End logging ---
 
 
         try:
@@ -165,8 +172,9 @@ def main():
 
             # --- Calculate and Output New Watermark ---
             # Only calculate and output a new watermark if a watermark column is defined
-            # and data was processed.
-            if row.get('watermark_column') and column_names and data:
+            # AND the original tables_list entry had a watermark column configured.
+            # This prevents trying to find a max watermark for tables not intended for incremental load.
+            if row.get('watermark_column') and str(row.get('watermark_column')).strip() != '' and column_names and data:
                  # Use the original watermark_column name from the tables_list for finding max value
                  original_watermark_column_name = row.get('watermark_column')
                  new_watermark_value = find_max_watermark_value(data, column_names, original_watermark_column_name)
