@@ -1,46 +1,36 @@
 # Scalable ETL Pipeline (MySQL to PostgreSQL)
 
-This project implements a simple, scalable, and generic ETL pipeline to copy data from a MySQL source database to a PostgreSQL target database using Python, Docker, and Apache Airflow for orchestration and parallelism.
-
-```mermaid
-graph TD
-    A[Start] --> B[Copy Customers & Categories]
-    A --> C[Copy Products & Departments]
-    A --> D[Copy Orders]
-    A --> E[Copy Order Items]
-    B --> F[End]
-    C --> F
-    D --> F
-    E --> F
-```
+This project implements a robust, scalable, and generic ETL pipeline to copy data from a MySQL source database to a PostgreSQL target database. It leverages Python for the core ETL logic, Docker for containerization, and Apache Airflow for orchestration, parallel execution, and incremental loading using a watermark strategy.
 
 ## Features
 
-- **Dockerized**: The pipeline logic runs within a Docker container, ensuring consistency across environments.  
-- **Generic Connectors**: Designed with a connector pattern (`util.py`) to easily extend support for different data sources (databases, APIs, files) and targets.  
-- **Parallel Processing**: Leverages Apache Airflow's `DockerOperator` to run multiple data copying tasks concurrently for improved performance.  
-- **Configurable**: Database connection details and tables to process are managed via configuration files and command-line arguments.  
-- **Idempotent (Table-level)**: Each Airflow task processes a specific group of tables independently, making it easier to retry failures at a granular level.
+- **Dockerized**: The pipeline application runs within a Docker container, ensuring a consistent and isolated execution environment.
+- **Generic Connectors**: Designed with a flexible connector pattern (util.py) that makes it easy to extend support for various data sources (databases, APIs, files) and targets.
+- **Parallel Processing**: Utilizes Apache Airflow's DockerOperator to execute multiple data copying tasks concurrently, significantly improving performance for large datasets.
+- **Incremental Loading (Watermarking)**: Implements a watermark strategy (using auto-incrementing IDs or timestamps) to copy only new or changed data since the last successful run, optimizing data movement and reducing load times.
+- **Airflow Orchestration**: Managed by an Apache Airflow DAG for scheduling, monitoring, retries, and state management (via Airflow Variables).
+- **Configurable**: Database connection details, tables to process, and incremental loading settings are managed via configuration files (config.py, tables_list) and Airflow Variables.
 
 ## Prerequisites
 
-- Docker and Docker Compose (recommended for easier setup)  
-- Python 3.8+  
-- Git  
-- Apache Airflow (if running with DAGs)  
+- Docker and Docker Compose (recommended for easier local setup)
+- Python 3.8+
+- Git
+- Apache Airflow environment (with DockerOperator enabled and access to the Docker daemon)
 
 ## Project Structure
 
 ```
 ├── app.py              # Main application entry point (parses args, orchestrates copy)
 ├── config.py           # Database connection details configuration
-├── util.py             # Database connector implementations and general utilities
-├── tables_list         # CSV file listing tables and load status
+├── util.py             # Database connector implementations, watermark utilities, and general helpers
+├── tables_list         # CSV file listing tables, load status, and watermark configuration
 ├── requirements.txt    # Python dependencies
 ├── Dockerfile          # Builds the Docker image for the pipeline application
+└── dags/               # Airflow DAG file(s)
+    └── data_pipeline_with_incremental.py # Airflow DAG for parallel incremental execution
 ```
-
-`read.py` and `write.py` (from previous iterations) have been refactored and their core logic integrated into the connector classes within `util.py`. These files can now be removed or are empty placeholders.
+Here is the enhanced and professional version of your **Setup** section, including installation of `requirements.txt` for both Windows and Linux:
 
 ---
 
@@ -49,11 +39,34 @@ graph TD
 ### Clone the Repository
 
 ```bash
-git clone <your_project_repo_url>
-cd <your_project_directory>
+git clone https://github.com/fmWaithaka/Etl_data_pipeline.git
+cd Etl_data_pipeline
 ```
 
-*(Replace `<your_project_repo_url>` and `<your_project_directory>` with your actual repository details)*
+#### Create and Activate a Virtual Environment (Recommended)
+
+**For Linux/macOS:**
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+**For Windows:**
+
+```bash
+python -m venv venv
+venv\Scripts\activate
+```
+
+#### Install the Project Dependencies
+
+After activating the virtual environment, install all required packages:
+
+```bash
+pip install -r requirements.txt
+```
+---
 
 ### Clone Source Database Data
 
@@ -63,7 +76,7 @@ The source MySQL database will be initialized with data from the retail_db repos
 git clone https://github.com/fmWaithaka/retail_db.git
 ```
 
-Make a note of the path to the cloned `retail_db` directory on your host machine.
+Make a note of the path to the cloned retail_db directory on your host machine (e.g., `C:\Users\your_name\Downloads\retail_db`).
 
 ### Create a Docker Network
 
@@ -75,12 +88,12 @@ docker network create my_pipeline_network
 
 ### Set up Source MySQL Database
 
-Run the MySQL container, mounting the cloned `retail_db` directory into the container's `/docker-entrypoint-initdb.d/`. This will automatically execute the `create_db.sql` script to create tables and load data on the first run.
+Run the MySQL container, mounting the cleaned retail_db directory:
 
 ```bash
 docker run --name mysql-container \
 --network my_pipeline_network \
--v path_to_your_db\retail_db:/docker-entrypoint-initdb.d/ \
+-v C:\Users\your_name\Downloads\retail_db:/docker-entrypoint-initdb.d/ \
 -e MYSQL_ROOT_PASSWORD=root \
 -e MYSQL_DATABASE=retail_db \
 -e MYSQL_USER=retail_user \
@@ -88,12 +101,11 @@ docker run --name mysql-container \
 -p 3306:3306 \
 -d mysql:8.0
 ```
-
-*(Replace `path_to_your_db\retail_db` with the actual path on your host)*
+(Replace `C:\Users\your_name\Downloads\retail_db` with your actual path.)
 
 ### Set up Target PostgreSQL Database
 
-Run the PostgreSQL container. It will be empty initially.
+Run the PostgreSQL container:
 
 ```bash
 docker run --name postgres-db \
@@ -105,12 +117,14 @@ docker run --name postgres-db \
 -d postgres
 ```
 
-### Update `config.py` (if necessary)
+### Update `config.py`
 
-Verify that `config.py` uses the correct container names (`mysql-container` and `postgres-db`) for `DB_HOST` in the dev environment.
+Verify `config.py` uses the correct container names:
 
 ```python
 # config.py
+import os
+
 DB_DETAILS = {
     'dev': {
         'SOURCE_DB': {
@@ -129,29 +143,28 @@ DB_DETAILS = {
         }
     }
 }
+
 ```
 
----
-
-## Build the Pipeline Docker Image
-
-Build the Docker image for your application code.
+### Build the Pipeline Docker Image
 
 ```bash
 docker build -t data-pipeline:latest .
 ```
 
----
+### Airflow Setup
 
+- Ensure you have a running Airflow environment.
+- Ensure Airflow workers/schedulers can access the Docker daemon (`/var/run/docker.sock`).
+- Ensure Airflow workers/schedulers can access the host path specified in the DAG mounts.
+- For detailed guidance on using the Airflow Python client, refer to the [official Apache Airflow client documentation](https://github.com/apache/airflow-client-python).
 ## Running the Pipeline
 
-### Manually (without Airflow)
-
-You can run the pipeline directly using `docker run`. This is useful for testing or one-off executions. The example below copies all tables specified in `tables_list`.
+### Manually (Full Load)
 
 ```bash
 docker run --name data-pipeline \
--v path_to_your_project:/app \
+-v \project_path\Etl_data_pipeline:/app \
 -it \
 -e SOURCE_DB_USER=retail_user \
 -e SOURCE_DB_PASS=itversity \
@@ -162,136 +175,99 @@ docker run --name data-pipeline \
 data-pipeline \
 app.py dev all
 ```
+(Replace the `\project_path\Etl_data_pipeline` with your actual one.)
 
-To copy specific tables (e.g., only `customers` and `orders`), replace `all` with a comma-separated list:
+### With Apache Airflow (Parallel & Incremental)
 
-```bash
-docker run ... data-pipeline app.py dev customers,orders
-```
+#### Place the DAG File
+
+Copy `data_pipeline_with_incremental.py` into your Airflow dags folder.
+
+#### Airflow Variables
+
+Create the following variables (initial value `None`):
+
+- `last_watermark_customers`
+- `last_watermark_orders`
+- `last_watermark_order_items`
+
+#### Trigger the DAG
+
+The DAG should now appear in Airflow UI for manual triggering or scheduled runs.
 
 ---
 
-### With Apache Airflow
+### Simulating New Data for Incremental Loading
 
-For scheduled, parallel, and orchestrated execution, use the provided Airflow DAG.
+To test the incremental loading functionality, you must insert **new records** into the source MySQL database **after** an initial full load has completed and Airflow Variables have been set.
 
-**Ensure Airflow Setup**: Make sure you have a running Airflow environment (local, Docker Compose, Kubernetes, etc.) and that it can communicate with your Docker daemon (often requires mounting /var/run/docker.sock into the Airflow worker/scheduler containers).
+Use the following SQL script to simulate new `customers`, `orders`, and `order_items`:
 
-**Place the DAG File**: Copy the data_pipeline_docker.py file into your Airflow dags folder.
+```sql
+-- SQL script to insert new data for incremental loading testing
 
-```python
-# dags/data_pipeline_docker.py
-from airflow.models import DAG
-from airflow.providers.docker.operators.docker import DockerOperator
-from airflow.utils.dates import days_ago
-from docker.types import Mount
+-- Start a transaction to ensure atomicity
+START TRANSACTION;
 
-from airflow.operators.dummy import DummyOperator
+-- Insert new customers (check for duplicates based on email)
+INSERT INTO customers (customer_fname, customer_lname, customer_email, customer_password, customer_street, customer_city, customer_state, customer_zipcode)
+SELECT 'New', 'CustomerOne', 'new.customer1@example.com', 'securepass1', '789 Pine Rd', 'Villagetown', 'TX', '75001'
+WHERE NOT EXISTS (
+    SELECT 1 FROM customers WHERE customer_email = 'new.customer1@example.com'
+);
 
-args = {
-    'owner': 'ITVersity, Inc',
-    'start_date': days_ago(2),
-}
+INSERT INTO customers (customer_fname, customer_lname, customer_email, customer_password, customer_street, customer_city, customer_state, customer_zipcode)
+SELECT 'Another', 'UserTwo', 'another.user2@example.com', 'mypassword', '101 Maple Ln', 'Hamlet City', 'FL', '32003'
+WHERE NOT EXISTS (
+    SELECT 1 FROM customers WHERE customer_email = 'another.user2@example.com'
+);
 
-# Define the DAG
-dag = DAG(
-    dag_id='data-pipeline-parallel',
-    default_args=args,
-    schedule_interval='0 0 * * *', # Example: Run daily at midnight UTC
-    catchup=False,
-    concurrency=4, # Limit concurrent tasks within this DAG run
-    max_active_tasks=4 # Limit active tasks across all DAG runs for this DAG
-)
+-- Retrieve the customer IDs for the newly inserted customers
+SET @customer_id_one = (SELECT customer_id FROM customers WHERE customer_email = 'new.customer1@example.com');
+SET @customer_id_two = (SELECT customer_id FROM customers WHERE customer_email = 'another.user2@example.com');
 
-# Environment variables to pass to the Docker container
-env_vars = {
-    'SOURCE_DB_USER': 'retail_user',
-    'SOURCE_DB_PASS': 'itversity',
-    'TARGET_DB_USER': 'retail_user',
-    'TARGET_DB_PASS': 'itversity',
-}
+-- Insert new orders associated with the new customers
+INSERT INTO orders (order_date, order_customer_id, order_status)
+VALUES (NOW(), @customer_id_one, 'PENDING');
 
-# Volume mounts for the Docker container (mapping host code to container /app)
-# IMPORTANT: This host path '/root/path_to_projectg' must be
-# accessible by the Airflow worker/scheduler running the DockerOperator.
-# Adjust this path based on your Airflow setup (e.g., if Airflow is also in Docker,
-# this might need to be a path on the Docker host or a shared volume).
-mounts = [
-    Mount(
-        source='/root/path_to_project', # Host path
-        target='/app', # Container path
-        type='bind'
-    )
-]
+SET @order_id_one = LAST_INSERT_ID(); -- Get the auto-generated order_id for the first order
 
-# Define groups of tables to process in parallel
-# Each entry in this list will become a separate Airflow task.
-table_groups = [
-    {'task_id': 'copy_customers_categories', 'tables': ['customers', 'categories']},
-    {'task_id': 'copy_products_departments', 'tables': ['products', 'departments']},
-    {'task_id': 'copy_orders', 'tables': ['orders']}, # Often good to isolate large tables
-    {'task_id': 'copy_order_items', 'tables': ['order_items']} # Often good to isolate large tables
-]
+INSERT INTO orders (order_date, order_customer_id, order_status)
+VALUES (NOW(), @customer_id_two, 'COMPLETE');
 
-# Optional: Dummy tasks for visualization
-start = DummyOperator(task_id='start_parallel_copy', dag=dag)
-end = DummyOperator(task_id='end_parallel_copy', dag=dag)
+SET @order_id_two = LAST_INSERT_ID(); -- Get the auto-generated order_id for the second order
 
-# Create DockerOperator tasks dynamically based on table_groups
-tasks = []
-for group in table_groups:
-    task = DockerOperator(
-        task_id=group['task_id'],
-        image='data-pipeline:latest', # The Docker image to use
-        auto_remove='success', # Remove the container after successful execution
-        environment=env_vars, # Pass environment variables
-        mounts=mounts, # Mount the code volume
-        network_mode='my_pipeline_network', # Attach to the custom network
-        entrypoint='python', # Use python as the entrypoint
-        # The command passed to the entrypoint
-        # Pass 'dev' as the environment and a comma-separated string of tables
-        command=['/app/app.py', 'dev', ','.join(group['tables'])],
-        docker_url='unix:///var/run/docker.sock', # URL to the Docker daemon (adjust if needed)
-        dag=dag # Associate with the DAG
-    )
-    tasks.append(task)
+-- Insert new order items linked to the new orders
+INSERT INTO order_items (order_item_order_id, order_item_product_id, order_item_quantity, order_item_subtotal, order_item_product_price)
+VALUES (
+    @order_id_one,
+    4, -- Example product_id
+    2,
+    (SELECT 2 * product_price FROM products WHERE product_id = 4),
+    (SELECT product_price FROM products WHERE product_id = 4)
+);
 
-# Define dependencies for parallel execution
-# All individual copy tasks run after 'start' and before 'end'.
-# Since there are no dependencies *between* the tasks in the 'tasks' list,
-# Airflow will schedule them to run in parallel based on available slots
-# (Airflow worker capacity, DAG's concurrency/max_active_tasks).
-start >> tasks >> end
+INSERT INTO order_items (order_item_order_id, order_item_product_id, order_item_quantity, order_item_subtotal, order_item_product_price)
+VALUES (
+    @order_id_two,
+    2, -- Example product_id
+    1,
+    (SELECT 1 * product_price FROM products WHERE product_id = 2),
+    (SELECT product_price FROM products WHERE product_id = 2)
+);
+
+-- Optional: Verify inserts before committing
+-- SELECT * FROM customers WHERE customer_email LIKE '%example.com';
+-- SELECT * FROM orders WHERE order_id IN (@order_id_one, @order_id_two);
+-- SELECT * FROM order_items WHERE order_item_order_id IN (@order_id_one, @order_id_two);
+
+-- Finalize the transaction
+COMMIT;
 ```
-*(Replace `/root/path_to_project` with the actual path on your host)*
 
-**Airflow UI**: The DAG should appear in the Airflow UI. You can trigger it manually or let the schedule run it. You will see multiple DockerOperator tasks running concurrently.
+> **Note:**  
+> Execute this script against your **source MySQL database** only after:
+> - The initial full data load has been completed successfully.
+> - The incremental load mechanism (Airflow Variables, Watermarks) has been properly configured.
 
-## Extensibility
-
-The refactored util.py uses a connector pattern with factory functions (create_source_connector, create_target_connector). To add support for a new data source (like an API) or a new target (like writing to S3 or a file format):
-
-1. Create a new connector class (e.g., APISourceConnector, S3TargetConnector) inheriting from SourceConnector or TargetConnector.
-2. Implement the required methods (connect, read_table or load_table).
-3. Update the corresponding factory function (create_source_connector or create_target_connector) in util.py to include an elif block that checks for the new DB_TYPE (or SOURCE_TYPE/TARGET_TYPE) and returns an instance of your new connector class.
-4. Update config.py to include configuration details for the new source/target type.
-5. Update requirements.txt with any new Python libraries needed for the new connector (e.g., requests for an API).
-
-## Troubleshooting
-
-**MySQL access denied or Connection Errors**:
-- Verify the environment variables (SOURCE_DB_USER, SOURCE_DB_PASS, TARGET_DB_USER, TARGET_DB_PASS) are correctly passed to the Docker container.
-- Ensure the Docker containers (mysql-container, postgres-db, data-pipeline) are all on the same Docker network (my_pipeline_network).
-- Check that the DB_HOST values in config.py (mysql-container, postgres-db) match the container names.
-- Check the container logs (docker logs <container_name>) for specific error details.
-
-**Container Stops Immediately After Start**:
-- For the database containers: Check docker logs <container_name>. For MySQL, ensure only MySQL-specific .sql files are in /docker-entrypoint-initdb.d/.
-- For the pipeline container: Check docker logs data-pipeline for Python traceback errors.
-
-**Airflow DockerOperator Errors**:
-- Verify the docker_url in the DAG is correct and the Airflow worker/scheduler can access the Docker daemon.
-- Ensure the mounts source path is correct and accessible from where the Docker container is being launched by Airflow.
-- Check the Airflow task logs for the specific error output from the Docker container execution.
-
-
+This ensures your **incremental ETL pipeline** will detect and process only the newly inserted records during the next scheduled run.
