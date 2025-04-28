@@ -2,6 +2,8 @@
 
 This project implements a robust, scalable, and generic ETL pipeline to copy data from a MySQL source database to a PostgreSQL target database. It leverages Python for the core ETL logic, Docker for containerization, and Apache Airflow for orchestration, parallel execution, and incremental loading using a watermark strategy.
 
+![Airflow DAG Pipeline](Screenshot/Dag%20pipeline.png)
+
 ## Features
 
 - **Dockerized**: The pipeline application runs within a Docker container, ensuring a consistent and isolated execution environment.
