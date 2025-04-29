@@ -52,7 +52,6 @@ def main():
     logging.info(f"Starting pipeline for environment '{env}' and tables '{table_arg}'...")
 
     logging.info("Loading DB configuration...")
-    # load_db_details should be updated to maybe load from a specific path if needed
     db_config = load_db_details(env)
     if not db_config:
         logging.error(f"Failed to load configuration for environment '{env}'.")
@@ -94,8 +93,6 @@ def main():
         logging.info(f"Processing table: {table_name}")
 
         # --- Incremental Loading Logic ---
-        last_watermark_value = None
-        # Check if watermark_column is defined and not an empty string
         if watermark_column and str(watermark_column).strip() != '':
             # Read the last watermark value from an environment variable
             # The environment variable name format is assumed to be LAST_WATERMARK_<TABLE_NAME_UPPERCASE>
@@ -105,9 +102,7 @@ def main():
             # Correctly handle the case where the environment variable is None, '', or the string 'None'
             if last_watermark_str is not None and last_watermark_str.lower() != 'none' and last_watermark_str.strip() != '':
                  try:
-                     # Attempt to convert the string value based on watermark_type
                      if watermark_type == 'id':
-                         # Ensure the value is treated as an integer for comparison
                          last_watermark_value = int(last_watermark_str)
                          logging.info(f"Retrieved last ID watermark for {table_name}: {last_watermark_value}")
                      elif watermark_type == 'timestamp':
@@ -128,7 +123,6 @@ def main():
             else:
                  # This block is hit if last_watermark_str is None, '', or 'None'
                  logging.info(f"No valid last watermark found for {table_name} (env var {env_var_name} is '{last_watermark_str}'). Performing full initial load.")
-                 # Ensure full load query is built by setting watermark_column and value to None
                  watermark_column = None
                  last_watermark_value = None
         else:
@@ -136,11 +130,8 @@ def main():
              # Ensure full load query is built
              watermark_column = None
              last_watermark_value = None
-        # --- End Incremental Loading Logic ---
 
-        # --- Add logging before calling read_table ---
         logging.info(f"Final read parameters for {table_name}: watermark_column={watermark_column}, last_watermark_value={last_watermark_value}")
-        # --- End logging ---
 
 
         try:
@@ -163,16 +154,10 @@ def main():
 
             logging.info(f"Loading data into target for table: {table_name}")
             # The load_table method in PostgresTargetConnector handles insertion.
-            # It currently uses INSERT. For incremental updates/deletes,
-            # you would need a different strategy here (e.g., MERGE, staging table).
-            # For insert-only incremental, INSERT is fine for new records.
             target_connector.load_table(table_name, data, column_names)
             logging.info(f"Successfully processed table: {table_name}")
 
             # --- Calculate and Output New Watermark ---
-            # Only calculate and output a new watermark if a watermark column is defined
-            # AND the original tables_list entry had a watermark column configured.
-            # This prevents trying to find a max watermark for tables not intended for incremental load.
             if row.get('watermark_column') and str(row.get('watermark_column')).strip() != '' and column_names and data:
                  # Use the original watermark_column name from the tables_list for finding max value
                  original_watermark_column_name = row.get('watermark_column')
@@ -180,8 +165,6 @@ def main():
 
                  if new_watermark_value is not None:
                       # Output the new watermark value in a parsable format for Airflow
-                      # Using print to stdout is common for Airflow to capture via XComs
-                      # Ensure the value is stringified for printing
                       print(f"NEW_WATERMARK_{table_name.upper()}={new_watermark_value}", flush=True) # Added flush=True
                       logging.info(f"Outputted new watermark for {table_name}: {new_watermark_value}")
                  else:
@@ -191,8 +174,6 @@ def main():
 
         except Exception as e:
             logging.error(f"Error processing table {table_name}: {e}", exc_info=True)
-            # Decide whether to continue or exit on error.
-            # Continuing allows other tables to potentially succeed.
             pass # Continue loop after logging error
 
     logging.info("Pipeline processing loop completed.")
